@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Brochure Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=DM+Mono:wght@300;400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --ink:    #0f0e0c;
+      --paper:  #f5f0e8;
+      --cream:  #ede7d5;
+      --gold:   #b8933a;
+      --rust:   #c0482a;
+      --muted:  #7a7060;
+      --border: #d0c8b4;
+      --radius: 2px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* ── Noise texture overlay ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ── */
+    .shell {
+      position: relative; z-index: 1;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+
+    /* ── Header ── */
+    header {
+      padding: 48px 0 32px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 48px;
+    }
+    .header-eyebrow {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 10px;
+    }
+    header h1 {
+      font-family: 'Playfair Display', serif;
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--ink);
+    }
+    header h1 span { color: var(--rust); }
+    .header-sub {
+      margin-top: 12px;
+      color: var(--muted);
+      font-weight: 300;
+      font-size: 14px;
+      max-width: 480px;
+    }
+
+    /* ── Form ── */
+    .form-card {
+      background: var(--cream);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 40px;
+      margin-bottom: 40px;
+    }
+
+    .field { margin-bottom: 24px; }
+    .field:last-of-type { margin-bottom: 0; }
+
+    label {
+      display: block;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    input {
+      width: 100%;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input:focus {
+      border-color: var(--gold);
+      box-shadow: 0 0 0 3px rgba(184,147,58,0.12);
+    }
+    input::placeholder { color: var(--border); }
+
+    /* ── Button ── */
+    .btn-row {
+      margin-top: 32px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    button {
+      cursor: pointer;
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      border: none;
+      border-radius: var(--radius);
+      padding: 13px 28px;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--ink);
+      color: var(--paper);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--rust);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(192,72,42,0.25);
+    }
+    .btn-primary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--muted); color: var(--ink); }
+
+    /* ── Status ── */
+    .status {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--gold);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error ── */
+    .error-box {
+      background: #fdf2f0;
+      border: 1px solid #f0c8c0;
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      color: var(--rust);
+      font-size: 13px;
+      margin-top: 20px;
+      font-family: 'DM Mono', monospace;
+    }
+
+    /* ── Output ── */
+    .output-wrap {
+      opacity: 0;
+      transform: translateY(16px);
+      transition: opacity 0.5s, transform 0.5s;
+    }
+    .output-wrap.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .output-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .output-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+    .copy-btn {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px 0;
+      transition: color 0.2s;
+    }
+    .copy-btn:hover { color: var(--ink); }
+
+    .brochure-card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 48px 52px;
+      box-shadow: 0 2px 24px rgba(0,0,0,0.04);
+    }
+
+    /* ── Markdown styles inside brochure ── */
+    .brochure-card h1, .brochure-card h2, .brochure-card h3 {
+      font-family: 'Playfair Display', serif;
+      color: var(--ink);
+      line-height: 1.2;
+    }
+    .brochure-card h1 { font-size: 1.9rem; margin-bottom: 20px; }
+    .brochure-card h2 {
+      font-size: 1.25rem;
+      margin-top: 36px; margin-bottom: 12px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+    .brochure-card h3 { font-size: 1rem; margin-top: 20px; margin-bottom: 8px; }
+    .brochure-card p  { margin-bottom: 14px; color: #2a2520; line-height: 1.75; }
+    .brochure-card ul, .brochure-card ol {
+      padding-left: 20px; margin-bottom: 14px;
+    }
+    .brochure-card li { margin-bottom: 6px; color: #2a2520; }
+    .brochure-card strong { color: var(--ink); font-weight: 500; }
+    .brochure-card a { color: var(--rust); text-decoration: none; }
+    .brochure-card a:hover { text-decoration: underline; }
+    .brochure-card hr {
+      border: none; border-top: 1px solid var(--border);
+      margin: 28px 0;
+    }
+    .brochure-card blockquote {
+      border-left: 3px solid var(--gold);
+      padding-left: 16px;
+      color: var(--muted);
+      font-style: italic;
+      margin: 20px 0;
+    }
+
+    /* ── Decorative rule ── */
+    .deco {
+      display: flex; align-items: center; gap: 12px;
+      color: var(--border);
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      margin-bottom: 28px;
+    }
+    .deco::before, .deco::after {
+      content: ''; flex: 1; height: 1px;
+      background: var(--border);
+    }
+
+    @media (max-width: 600px) {
+      .form-card { padding: 24px 20px; }
+      .brochure-card { padding: 28px 24px; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <p class="header-eyebrow">Powered by Ollama · qwen2.5</p>
+    <h1>Company<br><span>Brochure</span> Generator</h1>
+    <p class="header-sub">Enter a company name and URL to generate a polished markdown brochure from live website content.</p>
+  </header>
+
+  <main>
+    <div class="form-card">
+      <div class="field">
+        <label for="company">Company Name</label>
+        <input id="company" type="text" placeholder="e.g. Anthropic" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="url">Website URL</label>
+        <input id="url" type="url" placeholder="https://anthropic.com" autocomplete="off" />
+      </div>
+      <div class="btn-row">
+        <button class="btn-primary" id="genBtn" onclick="generate()">Generate Brochure</button>
+        <button class="btn-ghost" onclick="reset()">Clear</button>
+        <span class="status" id="status" style="display:none">
+          <span class="spinner"></span>
+          <span id="statusTxt">Starting…</span>
+        </span>
+      </div>
+      <div class="error-box" id="errorBox" style="display:none"></div>
+    </div>
+
+    <div class="output-wrap" id="output">
+      <div class="output-header">
+        <span class="output-label">Generated Brochure</span>
+        <button class="copy-btn" onclick="copyMd()">Copy Markdown</button>
+      </div>
+      <div class="deco">✦</div>
+      <div class="brochure-card" id="brochureHtml"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+  let rawMarkdown = '';
+
+  async function generate() {
+    const company = document.getElementById('company').value.trim();
+    const url     = document.getElementById('url').value.trim();
+    const btn     = document.getElementById('genBtn');
+    const status  = document.getElementById('status');
+    const statusTxt = document.getElementById('statusTxt');
+    const errBox  = document.getElementById('errorBox');
+    const out     = document.getElementById('output');
+    const html    = document.getElementById('brochureHtml');
+
+    errBox.style.display = 'none';
+    out.classList.remove('visible');
+    rawMarkdown = '';
+    html.innerHTML = '';
+
+    if (!company || !url) {
+      errBox.textContent = 'Both fields are required.';
+      errBox.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    status.style.display = 'flex';
+    statusTxt.textContent = 'Starting…';
+
+    try {
+      const res = await fetch('/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_name: company, url })
+      });
+
+      if (!res.ok) {
+        const d = await res.json();
+        errBox.textContent = d.error || 'Server error.';
+        errBox.style.display = 'block';
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete line
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = JSON.parse(line.slice(6));
+
+          if (payload.status) {
+            statusTxt.textContent = payload.status;
+          }
+
+          if (payload.token) {
+            rawMarkdown += payload.token;
+            html.innerHTML = marked.parse(rawMarkdown);
+            // Show output card as soon as first token arrives
+            if (!out.classList.contains('visible')) {
+              out.classList.add('visible');
+              out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+          }
+
+          if (payload.error) {
+            errBox.textContent = payload.error;
+            errBox.style.display = 'block';
+          }
+
+          if (payload.done) {
+            statusTxt.textContent = 'Done!';
+            setTimeout(() => { status.style.display = 'none'; }, 800);
+          }
+        }
+      }
+
+    } catch (err) {
+      errBox.textContent = `Network error: ${err.message}`;
+      errBox.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function reset() {
+    document.getElementById('company').value = '';
+    document.getElementById('url').value = '';
+    document.getElementById('errorBox').style.display = 'none';
+    document.getElementById('output').classList.remove('visible');
+    rawMarkdown = '';
+  }
+
+  async function copyMd() {
+    if (!rawMarkdown) return;
+    await navigator.clipboard.writeText(rawMarkdown);
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Markdown', 1800);
+  }
+
+  // Allow Enter key in inputs
+  document.addEventListener('DOMContentLoaded', () => {
+    ['company','url'].forEach(id => {
+      document.getElementById(id).addEventListener('keydown', e => {
+        if (e.key === 'Enter') generate();
+      });
+    });
+  });
+</script>
+</body>
+</html>
