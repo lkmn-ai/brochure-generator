@@ -1,6 +1,4 @@
-import os
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -12,23 +10,26 @@ load_dotenv()
 app = Flask(__name__, static_folder=".")
 CORS(app)
 
+# Connect to local Ollama
 openai = OpenAI(
     base_url='http://localhost:11434/v1',
     api_key='ollama'
 )
 
-MAX_LINKS    = 2      # only fetch 2 sub-pages max
-PAGE_TIMEOUT = 8      # seconds per HTTP fetch
-PROMPT_LIMIT = 4_000  # chars sent to model
-
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 links_system_prompt = """
 You are provided with a list of links found on a webpage.
-Decide which links are most relevant for a company brochure (About, Company, Careers).
-Pick at most 2 links.
-Respond only in JSON like:
-{"links": [{"type": "about page", "url": "https://example.com/about"}]}
+You are able to decide which of the links would be most relevant to include in a brochure about the company,
+such as links to an About page, or a Company page, or Careers/Jobs pages.
+You should respond in JSON as in this example:
+
+{
+    "links": [
+        {"type": "about page", "url": "https://openai.com/about"},
+        {"type": "careers page", "url": "https://openai.com/careers"}
+    ]
+}
 """
 
 brochure_system_prompt = """
@@ -38,70 +39,52 @@ Respond in markdown without code blocks.
 Include details of company culture, customers and careers/jobs if you have the information.
 """
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Your original notebook functions (unchanged) ──────────────────────────────
 
-def safe_fetch(url):
-    """Fetch page content; return empty string on failure/timeout."""
-    try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            return ex.submit(fetch_website_contents, url).result(timeout=PAGE_TIMEOUT)
-    except Exception:
-        return ""
+def get_links_user_prompt(url):
+    user_prompt = f"Here is the list of links on the website {url} - \n"
+    user_prompt += "Please decide which of these are relevant web links for a brochure about the company, "
+    user_prompt += "respond with the full https URL in JSON format. "
+    user_prompt += "Do not include Terms of Service, Privacy, email links.\n\nLinks (some might be relative links):\n\n"
+    links = fetch_website_links(url)
+    user_prompt += "\n".join(links)
+    return user_prompt
 
 
-def build_prompt_with_updates(company_name, url):
-    """
-    Generator that yields ("status", msg) during work,
-    then ("prompt", text) as the final item.
-    """
-    yield ("status", "Fetching homepage…")
-
-    # Fetch homepage and raw link list concurrently
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        homepage_fut = ex.submit(safe_fetch, url)
-        links_fut    = ex.submit(fetch_website_links, url)
-        homepage = homepage_fut.result()
-        links    = links_fut.result()
-
-    yield ("status", "Asking model to pick relevant links…")
-
-    links_prompt = (
-        f"Links on {url}:\n" + "\n".join(links)
-    )
-    resp = openai.chat.completions.create(
+def select_relevant_links(url):
+    response = openai.chat.completions.create(
         model="qwen2.5:latest",
         messages=[
             {"role": "system", "content": links_system_prompt},
-            {"role": "user",   "content": links_prompt},
+            {"role": "user", "content": get_links_user_prompt(url)}
         ],
-        response_format={"type": "json_object"},
-        max_tokens=200,   # ← tiny output = fast
+        response_format={"type": "json_object"}
     )
-    chosen = json.loads(resp.choices[0].message.content).get("links", [])[:MAX_LINKS]
-
-    # Fetch sub-pages concurrently
-    sub_pages = {}
-    if chosen:
-        yield ("status", f"Fetching {len(chosen)} sub-page(s) in parallel…")
-        with ThreadPoolExecutor(max_workers=MAX_LINKS) as ex:
-            futures = {ex.submit(safe_fetch, lnk["url"]): lnk for lnk in chosen}
-            for fut in as_completed(futures):
-                lnk = futures[fut]
-                sub_pages[lnk["type"]] = fut.result()
-
-    # Assemble final prompt
-    yield ("status", "Building prompt…")
-    prompt = (
-        f"Company: {company_name}\n\n"
-        f"## Landing page\n\n{homepage}\n\n"
-    )
-    for page_type, content in sub_pages.items():
-        prompt += f"\n\n## {page_type}\n\n{content}"
-
-    yield ("prompt", prompt[:PROMPT_LIMIT])
+    result = response.choices[0].message.content
+    links = json.loads(result)
+    return links
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+def fetch_page_and_all_relevant_links(url):
+    contents = fetch_website_contents(url)
+    relevant_links = select_relevant_links(url)
+    result = f"## Landing page content for {url} \n\n {contents} \n\n"
+    for link in relevant_links['links']:
+        result += f"\n\n## Content for {link['type']}"
+        result += fetch_website_contents(link["url"])
+    return result
+
+
+def get_brochure_user_prompt(company_name, url):
+    user_prompt = f"You are looking at a company called: {company_name}\n"
+    user_prompt += "Here are the contents of its landing page and other relevant pages; "
+    user_prompt += "use this information to build a short brochure of the company in markdown without code blocks.\n\n"
+    user_prompt += fetch_page_and_all_relevant_links(url)
+    user_prompt = user_prompt[:5_000]  # Truncate if more than 5,000 characters
+    return user_prompt
+
+
+# ── Flask routes ──────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -110,34 +93,35 @@ def index():
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    data         = request.get_json()
+    data = request.get_json()
     company_name = data.get("company_name", "").strip()
-    url          = data.get("url", "").strip()
+    url = data.get("url", "").strip()
 
     if not company_name or not url:
         return jsonify({"error": "Both company_name and url are required."}), 400
 
     def event_stream():
         try:
-            user_prompt = None
+            # Step 1 - scraping status
+            yield f"data: {json.dumps({'status': 'Fetching website links...'})}\n\n"
 
-            # Phase 1 — scrape + build prompt with live status updates
-            for kind, value in build_prompt_with_updates(company_name, url):
-                if kind == "status":
-                    yield f"data: {json.dumps({'status': value})}\n\n"
-                elif kind == "prompt":
-                    user_prompt = value
+            # Step 2 - ask model to pick links (your original select_relevant_links)
+            yield f"data: {json.dumps({'status': 'Selecting relevant links...'})}\n\n"
 
-            # Phase 2 — stream brochure tokens from Ollama
-            yield f"data: {json.dumps({'status': 'Generating brochure…'})}\n\n"
+            # Step 3 - build the full prompt (your original get_brochure_user_prompt)
+            yield f"data: {json.dumps({'status': 'Fetching page contents...'})}\n\n"
+            user_prompt = get_brochure_user_prompt(company_name, url)
+
+            # Step 4 - stream brochure from Ollama (your original stream_brochure logic)
+            yield f"data: {json.dumps({'status': 'Generating brochure...'})}\n\n"
 
             stream = openai.chat.completions.create(
                 model="qwen2.5:latest",
                 messages=[
                     {"role": "system", "content": brochure_system_prompt},
-                    {"role": "user",   "content": user_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
-                stream=True,
+                stream=True
             )
 
             for chunk in stream:
